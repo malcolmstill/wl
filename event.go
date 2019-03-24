@@ -159,12 +159,10 @@ func (c *Context) ReadEvent() (*Event, error) {
 		}
 		ev.scms = scms
 		fds, err := syscall.ParseUnixRights(&ev.scms[0])
-		fmt.Println("fds", fds)
 		if err != nil {
 			fmt.Print("Failed to extract fd")
 		}
 		for _, fd := range fds {
-			fmt.Println("extracted fd", fd)
 			c.AddFD(uintptr(fd))
 		}
 	}
