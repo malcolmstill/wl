@@ -24,6 +24,8 @@ type Event struct {
 	anything about this we end up getting a file
 	descriptor on the wrong wayland protocol message.
 
+	See https://keithp.com/blogs/fd-passing/
+
 	This is a hacky solution:
 	- have a map from client fd to list of receive fds
 	- when we receive a fd over the socket add it to
