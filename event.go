@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"fmt"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type Event struct {
-	pid    ProxyId
+	Pid    ProxyId
 	Opcode uint32
 	data   []byte
 	scms   []syscall.SocketControlMessage
 	off    int
+	oob    []byte
 }
 
 func (c *Context) readEvent() (*Event, error) {
@@ -37,13 +40,62 @@ func (c *Context) readEvent() (*Event, error) {
 		ev.scms = scms
 	}
 
-	ev.pid = ProxyId(order.Uint32(buf[0:4]))
+	ev.Pid = ProxyId(order.Uint32(buf[0:4]))
 	ev.Opcode = uint32(order.Uint16(buf[4:6]))
 	size := uint32(order.Uint16(buf[6:8]))
 
 	// subtract 8 bytes from header
 	data := bytePool.Take(int(size) - 8)
 	n, err = c.conn.Read(data)
+	if err != nil {
+		return nil, err
+	}
+	if n != int(size)-8 {
+		return nil, fmt.Errorf("Invalid message size.")
+	}
+	ev.data = data
+
+	bytePool.Give(buf)
+	bytePool.Give(control)
+
+	return ev, nil
+}
+
+func ReadEventUnix(fd int) (*Event, error) {
+	buf := bytePool.Take(8)
+	control := bytePool.Take(24)
+
+	n, oobn, _, _, err := unix.Recvmsg(fd, buf, control, 0)
+	// n, oobn, _, _, err := c.conn.ReadMsgUnix(buf[:], control)
+	if err != nil {
+		return nil, err
+	}
+	if n != 8 {
+		return nil, fmt.Errorf("Unable to read message header.")
+	}
+
+	ev := new(Event)
+
+	if oobn > 0 {
+		if oobn > len(control) {
+			return nil, fmt.Errorf("Unsufficient control msg buffer")
+		}
+		scms, err := syscall.ParseSocketControlMessage(control)
+		if err != nil {
+			return nil, fmt.Errorf("Control message parse error: %s", err)
+		}
+		ev.scms = scms
+	}
+
+	ev.Pid = ProxyId(order.Uint32(buf[0:4]))
+	// fmt.Println("id", ev.Pid)
+	ev.Opcode = uint32(order.Uint16(buf[4:6]))
+	size := uint32(order.Uint16(buf[6:8]))
+
+	// subtract 8 bytes from header
+	data := bytePool.Take(int(size) - 8)
+	n, err = unix.Read(fd, data)
+	// n, err = c.conn.Read(data)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +132,7 @@ func (ev *Event) Uint32() uint32 {
 }
 
 func (ev *Event) Proxy(c *Context) Proxy {
-	return c.lookupProxy(ProxyId(ev.Uint32()))
+	return c.LookupProxy(ProxyId(ev.Uint32()))
 }
 
 func (ev *Event) String() string {

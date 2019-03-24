@@ -1,7 +1,6 @@
 package wl
 
 import (
-	"context"
 	"errors"
 	"io"
 	"log"
@@ -9,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func init() {
@@ -18,6 +19,7 @@ func init() {
 type Context struct {
 	mu           sync.RWMutex
 	conn         *net.UnixConn
+	SockFD       int
 	currentId    ProxyId
 	objects      map[ProxyId]Proxy
 	dispatchChan chan struct{}
@@ -33,7 +35,7 @@ func (ctx *Context) Register(proxy Proxy) {
 	ctx.objects[ctx.currentId] = proxy
 }
 
-func (ctx *Context) lookupProxy(id ProxyId) Proxy {
+func (ctx *Context) LookupProxy(id ProxyId) Proxy {
 	ctx.mu.RLock()
 	defer ctx.mu.RUnlock()
 	proxy, ok := ctx.objects[id]
@@ -87,8 +89,111 @@ func Connect(addr string) (ret *Display, err error) {
 	return NewDisplay(c), nil
 }
 
+func NewClientConnect(fd int) *Display {
+	c := new(Context)
+	c.objects = make(map[ProxyId]Proxy)
+	c.currentId = 0
+	c.dispatchChan = make(chan struct{})
+	c.exitChan = make(chan struct{})
+	c.SockFD = fd
+	// c.conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Name: addr, Net: "unix"})
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// c.conn.SetReadDeadline(time.Time{})
+	// //dispatch events in separate gorutine
+	// go c.run()
+	return NewDisplay(c)
+}
+
+func Listen(addr string) (ret *Display, err error) {
+	c := new(Context)
+	c.objects = make(map[ProxyId]Proxy)
+
+	runtime_dir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtime_dir == "" {
+		return nil, errors.New("XDG_RUNTIME_DIR not set in the environment.")
+	}
+	if addr == "" {
+		addr = os.Getenv("WAYLAND_DISPLAY")
+	}
+	if addr == "" {
+		addr = "wayland-0"
+	}
+	addr = runtime_dir + "/" + addr
+
+	sockFD, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		log.Println(err)
+		// runtime.Goexit()
+		return NewDisplay(c), err
+	}
+	var sockAddr unix.SockaddrUnix
+	sockAddr.Name = addr
+	unix.Unlink(addr)
+	err = unix.Bind(sockFD, &sockAddr)
+	if err != nil {
+		log.Printf("Couldn't bind %s\n", sockAddr.Name)
+	}
+	err = unix.Listen(sockFD, 64)
+	if err != nil {
+		log.Println(err)
+		return NewDisplay(c), err
+	}
+
+	c.currentId = 0
+	c.SockFD = sockFD
+	// c := new(Context)
+	// c.objects = make(map[ProxyId]Proxy)
+	// c.currentId = 0
+	// c.dispatchChan = make(chan struct{})
+	// c.exitChan = make(chan struct{})
+	// c.conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Name: addr, Net: "unix"})
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// c.conn.SetReadDeadline(time.Time{})
+	//dispatch events in separate gorutine
+	// go c.run()
+	return NewDisplay(c), nil
+}
+
+func ListenFD(addr string) (ret int, err error) {
+	runtime_dir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtime_dir == "" {
+		return -1, errors.New("XDG_RUNTIME_DIR not set in the environment.")
+	}
+	if addr == "" {
+		addr = os.Getenv("WAYLAND_DISPLAY")
+	}
+	if addr == "" {
+		addr = "wayland-0"
+	}
+	addr = runtime_dir + "/" + addr
+
+	sockFD, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		log.Println(err)
+		return -1, err
+	}
+	var sockAddr unix.SockaddrUnix
+	sockAddr.Name = addr
+	unix.Unlink(addr)
+	err = unix.Bind(sockFD, &sockAddr)
+	if err != nil {
+		log.Printf("Couldn't bind %s\n", sockAddr.Name)
+	}
+	err = unix.Listen(sockFD, 64)
+	if err != nil {
+		log.Println(err)
+		return -1, err
+	}
+
+	return sockFD, nil
+}
+
 func (c *Context) run() {
-	ctx := context.Background()
+	// ctx := context.Background()
 
 loop:
 	for {
@@ -110,10 +215,10 @@ loop:
 				log.Fatal(err)
 			}
 
-			proxy := c.lookupProxy(ev.pid)
+			proxy := c.LookupProxy(ev.Pid)
 			if proxy != nil {
 				if dispatcher, ok := proxy.(Dispatcher); ok {
-					dispatcher.Dispatch(ctx, ev)
+					dispatcher.Dispatch(ev)
 					bytePool.Give(ev.data)
 				} else {
 					log.Print("Not dispatched")

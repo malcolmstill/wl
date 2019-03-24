@@ -1,13 +1,10 @@
 package wl
 
-import (
-	"context"
-)
-
 type ProxyId uint32
 
 type Dispatcher interface {
-	Dispatch(context.Context, *Event)
+	Dispatch(*Event)
+	// Dispatch(*Event)
 }
 
 type Proxy interface {
