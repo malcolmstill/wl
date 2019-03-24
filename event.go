@@ -17,6 +17,26 @@ type Event struct {
 	oob    []byte
 }
 
+/*
+	Okay, so if you pass a file descriptor across a
+	UNIX domain socket, you may actually receive it
+	on an earlier call to recvmsg. If we don't do
+	anything about this we end up getting a file
+	descriptor on the wrong wayland protocol message.
+
+	This is a hacky solution:
+	- have a map from client fd to list of receive fds
+	- when we receive a fd over the socket add it to
+	  the clients list of fds
+	- when we call event.FD() take the earliest FD
+	  from the list
+
+	UPDATE: Scratch the above. The actual solution is to
+	store a lists of incoming fds in the Context
+	and modify the generator to set FDs like:
+		ev.Fd = p.Context().NextFD()
+*/
+
 func (c *Context) readEvent() (*Event, error) {
 	buf := bytePool.Take(8)
 	control := bytePool.Take(24)
@@ -65,8 +85,7 @@ func ReadEventUnix(fd int) (*Event, error) {
 	buf := bytePool.Take(8)
 	control := bytePool.Take(24)
 
-	n, oobn, _, _, err := unix.Recvmsg(fd, buf, control, 0)
-	// n, oobn, _, _, err := c.conn.ReadMsgUnix(buf[:], control)
+	n, oobn, _, _, err := unix.Recvmsg(fd, buf, control, unix.MSG_DONTWAIT)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +122,66 @@ func ReadEventUnix(fd int) (*Event, error) {
 		return nil, fmt.Errorf("Invalid message size.")
 	}
 	ev.data = data
+	fmt.Println("data", data)
+	bytePool.Give(buf)
+	bytePool.Give(control)
 
+	return ev, nil
+}
+
+func (c *Context) ReadEvent() (*Event, error) {
+	buf := bytePool.Take(8)
+	control := bytePool.Take(24)
+
+	if c.fds == nil {
+		c.fds = make([]uintptr, 0)
+	}
+
+	n, oobn, _, _, err := unix.Recvmsg(c.SockFD, buf, control, unix.MSG_DONTWAIT)
+	if err != nil {
+		return nil, err
+	}
+	if n != 8 {
+		return nil, fmt.Errorf("Unable to read message header.")
+	}
+
+	ev := new(Event)
+
+	if oobn > 0 {
+		if oobn > len(control) {
+			return nil, fmt.Errorf("Unsufficient control msg buffer")
+		}
+		scms, err := syscall.ParseSocketControlMessage(control)
+		if err != nil {
+			return nil, fmt.Errorf("Control message parse error: %s", err)
+		}
+		ev.scms = scms
+		fds, err := syscall.ParseUnixRights(&ev.scms[0])
+		fmt.Println("fds", fds)
+		if err != nil {
+			fmt.Print("Failed to extract fd")
+		}
+		for _, fd := range fds {
+			fmt.Println("extracted fd", fd)
+			c.AddFD(uintptr(fd))
+		}
+	}
+
+	ev.Pid = ProxyId(order.Uint32(buf[0:4]))
+	ev.Opcode = uint32(order.Uint16(buf[4:6]))
+	size := uint32(order.Uint16(buf[6:8]))
+
+	// subtract 8 bytes from header
+	data := bytePool.Take(int(size) - 8)
+	n, err = unix.Read(c.SockFD, data)
+	// n, err = c.conn.Read(data)
+	if err != nil {
+		return nil, err
+	}
+	if n != int(size)-8 {
+		return nil, fmt.Errorf("Invalid message size.")
+	}
+	ev.data = data
 	bytePool.Give(buf)
 	bytePool.Give(control)
 

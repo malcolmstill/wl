@@ -24,6 +24,7 @@ type Context struct {
 	objects      map[ProxyId]Proxy
 	dispatchChan chan struct{}
 	exitChan     chan struct{}
+	fds          []uintptr
 }
 
 func (ctx *Context) Register(proxy Proxy) {
@@ -33,6 +34,15 @@ func (ctx *Context) Register(proxy Proxy) {
 	proxy.SetId(ctx.currentId)
 	proxy.SetContext(ctx)
 	ctx.objects[ctx.currentId] = proxy
+}
+
+func (ctx *Context) RegisterId(proxy Proxy, id int) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.currentId += 1
+	proxy.SetId(ProxyId(id))
+	proxy.SetContext(ctx)
+	ctx.objects[ProxyId(id)] = proxy
 }
 
 func (ctx *Context) LookupProxy(id ProxyId) Proxy {
@@ -62,6 +72,19 @@ func (c *Context) Dispatch() chan<- struct{} {
 	return c.dispatchChan
 }
 
+func (c *Context) AddFD(fd uintptr) {
+	c.fds = append(c.fds, fd)
+}
+
+func (c *Context) NextFD() uintptr {
+	if len(c.fds) > 0 {
+		fd := c.fds[0]
+		c.fds = c.fds[1:]
+		return fd
+	}
+	return 0
+}
+
 func Connect(addr string) (ret *Display, err error) {
 	runtime_dir := os.Getenv("XDG_RUNTIME_DIR")
 	if runtime_dir == "" {
@@ -86,7 +109,7 @@ func Connect(addr string) (ret *Display, err error) {
 	c.conn.SetReadDeadline(time.Time{})
 	//dispatch events in separate gorutine
 	go c.run()
-	return NewDisplay(c), nil
+	return NewDisplay(c, 1), nil
 }
 
 func NewClientConnect(fd int) *Display {
@@ -96,14 +119,7 @@ func NewClientConnect(fd int) *Display {
 	c.dispatchChan = make(chan struct{})
 	c.exitChan = make(chan struct{})
 	c.SockFD = fd
-	// c.conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Name: addr, Net: "unix"})
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// c.conn.SetReadDeadline(time.Time{})
-	// //dispatch events in separate gorutine
-	// go c.run()
-	return NewDisplay(c)
+	return NewDisplay(c, 1)
 }
 
 func Listen(addr string) (ret *Display, err error) {
@@ -126,7 +142,7 @@ func Listen(addr string) (ret *Display, err error) {
 	if err != nil {
 		log.Println(err)
 		// runtime.Goexit()
-		return NewDisplay(c), err
+		return NewDisplay(c, 1), err
 	}
 	var sockAddr unix.SockaddrUnix
 	sockAddr.Name = addr
@@ -138,24 +154,12 @@ func Listen(addr string) (ret *Display, err error) {
 	err = unix.Listen(sockFD, 64)
 	if err != nil {
 		log.Println(err)
-		return NewDisplay(c), err
+		return NewDisplay(c, 1), err
 	}
 
 	c.currentId = 0
 	c.SockFD = sockFD
-	// c := new(Context)
-	// c.objects = make(map[ProxyId]Proxy)
-	// c.currentId = 0
-	// c.dispatchChan = make(chan struct{})
-	// c.exitChan = make(chan struct{})
-	// c.conn, err = net.DialUnix("unix", nil, &net.UnixAddr{Name: addr, Net: "unix"})
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// c.conn.SetReadDeadline(time.Time{})
-	//dispatch events in separate gorutine
-	// go c.run()
-	return NewDisplay(c), nil
+	return NewDisplay(c, 1), nil
 }
 
 func ListenFD(addr string) (ret int, err error) {
