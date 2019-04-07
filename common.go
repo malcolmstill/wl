@@ -15,8 +15,10 @@ type Proxy interface {
 }
 
 type BaseProxy struct {
-	id  ProxyId
-	ctx *Context
+	id        ProxyId
+	version   uint32
+	ctx       *Context
+	container interface{}
 }
 
 func (p *BaseProxy) Id() ProxyId {
@@ -27,12 +29,35 @@ func (p *BaseProxy) SetId(id ProxyId) {
 	p.id = id
 }
 
+func (p *BaseProxy) Version() uint32 {
+	return p.version
+}
+
+func (p *BaseProxy) SetVersion(version uint32) {
+	p.version = version
+}
+
 func (p *BaseProxy) Context() *Context {
 	return p.ctx
 }
 
 func (p *BaseProxy) SetContext(c *Context) {
 	p.ctx = c
+}
+
+func (p *BaseProxy) Container() interface{} {
+	return p.container
+}
+
+func (p *BaseProxy) SetContainer(c interface{}) {
+	p.container = c
+}
+
+func (p *BaseProxy) Unregister(s string) {
+	if p.ctx != nil {
+		// fmt.Println("Removing object", p.id, s)
+		delete(p.ctx.objects, p.id)
+	}
 }
 
 type Handler interface {
