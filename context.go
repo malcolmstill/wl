@@ -61,6 +61,16 @@ func (ctx *Context) unregister(proxy Proxy) {
 	delete(ctx.objects, proxy.Id())
 }
 
+func (ctx *Context) Unregister(proxy Proxy) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	delete(ctx.objects, proxy.Id())
+}
+
+func (ctx *Context) Objects() map[ProxyId]Proxy {
+	return ctx.objects
+}
+
 func (c *Context) Close() {
 	c.conn.Close()
 	c.exitChan <- struct{}{}
@@ -223,7 +233,7 @@ loop:
 			if proxy != nil {
 				if dispatcher, ok := proxy.(Dispatcher); ok {
 					dispatcher.Dispatch(ev)
-					bytePool.Give(ev.data)
+					bytePool.Give(ev.Data)
 				} else {
 					log.Print("Not dispatched")
 				}
