@@ -216,7 +216,12 @@ func (ev *Event) Uint32() uint32 {
 }
 
 func (ev *Event) Proxy(c *Context) Proxy {
-	return c.LookupProxy(ProxyId(ev.Uint32()))
+	id := ev.Uint32()
+	if id == 0 {
+		return nil
+	} else {
+		return c.LookupProxy(ProxyId(id))
+	}
 }
 
 func (ev *Event) String() string {
