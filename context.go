@@ -173,9 +173,9 @@ func Listen(addr string) (ret *Display, err error) {
 }
 
 func ListenFD(addr string) (ret int, err error) {
-	runtime_dir := os.Getenv("XDG_RUNTIME_DIR")
-	if runtime_dir == "" {
-		return -1, errors.New("XDG_RUNTIME_DIR not set in the environment.")
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		return -1, errors.New("XDG_RUNTIME_DIR not set in the environment")
 	}
 	if addr == "" {
 		addr = os.Getenv("WAYLAND_DISPLAY")
@@ -183,7 +183,7 @@ func ListenFD(addr string) (ret int, err error) {
 	if addr == "" {
 		addr = "wayland-0"
 	}
-	addr = runtime_dir + "/" + addr
+	addr = runtimeDir + "/" + addr
 
 	sockFD, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
 	if err != nil {
