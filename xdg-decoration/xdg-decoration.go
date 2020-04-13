@@ -10,7 +10,7 @@ import (
 	"sync"
 
 	"github.com/malcolmstill/wl"
-	"github.com/malcolmstill/wl/zxdgv6"
+	xdg "github.com/malcolmstill/wl/xdg"
 )
 
 type ZxdgDecorationManagerV1DestroyEvent struct {
@@ -42,7 +42,7 @@ func (p *ZxdgDecorationManagerV1) RemoveDestroyHandler(h ZxdgDecorationManagerV1
 
 type ZxdgDecorationManagerV1GetToplevelDecorationEvent struct {
 	Id       *ZxdgToplevelDecorationV1
-	Toplevel *zxdgv6.ZxdgToplevelV6
+	Toplevel *xdg.XdgToplevel
 }
 
 type ZxdgDecorationManagerV1GetToplevelDecorationHandler interface {
@@ -84,7 +84,7 @@ func (p *ZxdgDecorationManagerV1) Dispatch(event *wl.Event) {
 		if len(p.getToplevelDecorationHandlers) > 0 {
 			ev := ZxdgDecorationManagerV1GetToplevelDecorationEvent{}
 			ev.Id = NewZxdgToplevelDecorationV1(p.Context(), int(event.Uint32()))
-			ev.Toplevel = event.Proxy(p.Context()).(*zxdgv6.ZxdgToplevelV6)
+			ev.Toplevel = event.Proxy(p.Context()).(*xdg.XdgToplevel)
 			p.mu.RLock()
 			for _, h := range p.getToplevelDecorationHandlers {
 				h.HandleZxdgDecorationManagerV1GetToplevelDecoration(ev)
