@@ -4,26 +4,34 @@ import (
 	"errors"
 	"net"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type Request struct {
 	pid    ProxyId
-	opcode uint32
+	Opcode uint32
 	data   []byte
+	scms   []syscall.SocketControlMessage
+	off    int
 	oob    []byte
 }
 
 func (context *Context) SendRequest(proxy Proxy, opcode uint32, args ...interface{}) (err error) {
 	req := Request{
 		pid:    proxy.Id(),
-		opcode: opcode,
+		Opcode: opcode,
 	}
 
 	for _, arg := range args {
 		req.Write(arg)
 	}
 
-	return writeRequest(context.conn, req)
+	if context.conn != nil {
+		return writeRequest(context.conn, req)
+	} else {
+		return writeRequestUnix(context.SockFD, req)
+	}
 }
 
 func (r *Request) Write(arg interface{}) {
@@ -96,7 +104,7 @@ func writeRequest(conn *net.UnixConn, r Request) error {
 	buf := make([]byte, 4)
 	order.PutUint32(buf, uint32(r.pid))
 	header = append(header, buf...)
-	order.PutUint32(buf, uint32(size<<16|r.opcode&0x0000ffff))
+	order.PutUint32(buf, uint32(size<<16|r.Opcode&0x0000ffff))
 	header = append(header, buf...)
 
 	d, c, err := conn.WriteMsgUnix(append(header, r.data...), r.oob, nil)
@@ -106,6 +114,31 @@ func writeRequest(conn *net.UnixConn, r Request) error {
 	if c != len(r.oob) || d != (len(header)+len(r.data)) {
 		return errors.New("WriteMsgUnix failed")
 	}
+	bytePool.Give(r.data)
+
+	return nil
+}
+
+func writeRequestUnix(fd int, r Request) error {
+	var header []byte
+	// calculate message total size
+	size := uint32(len(r.data) + 8)
+	buf := make([]byte, 4)
+	order.PutUint32(buf, uint32(r.pid))
+	header = append(header, buf...)
+	order.PutUint32(buf, uint32(size<<16|r.Opcode&0x0000ffff))
+	header = append(header, buf...)
+
+	// unix.
+	var addr unix.Sockaddr
+	err := unix.Sendmsg(fd, append(header, r.data...), r.oob, addr, 0)
+	// d, c, err := conn.WriteMsgUnix(append(header, r.data...), r.oob, nil)
+	if err != nil {
+		return err
+	}
+	// if c != len(r.oob) || d != (len(header)+len(r.data)) {
+	// 	return errors.New("WriteMsgUnix failed")
+	// }
 	bytePool.Give(r.data)
 
 	return nil

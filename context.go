@@ -1,7 +1,6 @@
 package wl
 
 import (
-	"context"
 	"errors"
 	"io"
 	"log"
@@ -9,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func init() {
@@ -18,10 +19,12 @@ func init() {
 type Context struct {
 	mu           sync.RWMutex
 	conn         *net.UnixConn
+	SockFD       int
 	currentId    ProxyId
 	objects      map[ProxyId]Proxy
 	dispatchChan chan struct{}
 	exitChan     chan struct{}
+	fds          []uintptr
 }
 
 func (ctx *Context) Register(proxy Proxy) {
@@ -33,7 +36,16 @@ func (ctx *Context) Register(proxy Proxy) {
 	ctx.objects[ctx.currentId] = proxy
 }
 
-func (ctx *Context) lookupProxy(id ProxyId) Proxy {
+func (ctx *Context) RegisterId(proxy Proxy, id int) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.currentId += 1
+	proxy.SetId(ProxyId(id))
+	proxy.SetContext(ctx)
+	ctx.objects[ProxyId(id)] = proxy
+}
+
+func (ctx *Context) LookupProxy(id ProxyId) Proxy {
 	ctx.mu.RLock()
 	defer ctx.mu.RUnlock()
 	proxy, ok := ctx.objects[id]
@@ -49,6 +61,16 @@ func (ctx *Context) unregister(proxy Proxy) {
 	delete(ctx.objects, proxy.Id())
 }
 
+func (ctx *Context) Unregister(proxy Proxy) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	delete(ctx.objects, proxy.Id())
+}
+
+func (ctx *Context) Objects() map[ProxyId]Proxy {
+	return ctx.objects
+}
+
 func (c *Context) Close() {
 	c.conn.Close()
 	c.exitChan <- struct{}{}
@@ -58,6 +80,19 @@ func (c *Context) Close() {
 
 func (c *Context) Dispatch() chan<- struct{} {
 	return c.dispatchChan
+}
+
+func (c *Context) AddFD(fd uintptr) {
+	c.fds = append(c.fds, fd)
+}
+
+func (c *Context) NextFD() uintptr {
+	if len(c.fds) > 0 {
+		fd := c.fds[0]
+		c.fds = c.fds[1:]
+		return fd
+	}
+	return 0
 }
 
 func Connect(addr string) (ret *Display, err error) {
@@ -84,11 +119,95 @@ func Connect(addr string) (ret *Display, err error) {
 	c.conn.SetReadDeadline(time.Time{})
 	//dispatch events in separate gorutine
 	go c.run()
-	return NewDisplay(c), nil
+	return NewDisplay(c, 1), nil
+}
+
+func NewClientConnect(fd int) *Display {
+	c := new(Context)
+	c.objects = make(map[ProxyId]Proxy)
+	c.currentId = 0
+	c.dispatchChan = make(chan struct{})
+	c.exitChan = make(chan struct{})
+	c.SockFD = fd
+	return NewDisplay(c, 1)
+}
+
+func Listen(addr string) (ret *Display, err error) {
+	c := new(Context)
+	c.objects = make(map[ProxyId]Proxy)
+
+	runtime_dir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtime_dir == "" {
+		return nil, errors.New("XDG_RUNTIME_DIR not set in the environment.")
+	}
+	if addr == "" {
+		addr = os.Getenv("WAYLAND_DISPLAY")
+	}
+	if addr == "" {
+		addr = "wayland-0"
+	}
+	addr = runtime_dir + "/" + addr
+
+	sockFD, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		log.Println(err)
+		// runtime.Goexit()
+		return NewDisplay(c, 1), err
+	}
+	var sockAddr unix.SockaddrUnix
+	sockAddr.Name = addr
+	unix.Unlink(addr)
+	err = unix.Bind(sockFD, &sockAddr)
+	if err != nil {
+		log.Printf("Couldn't bind %s\n", sockAddr.Name)
+	}
+	err = unix.Listen(sockFD, 64)
+	if err != nil {
+		log.Println(err)
+		return NewDisplay(c, 1), err
+	}
+
+	c.currentId = 0
+	c.SockFD = sockFD
+	return NewDisplay(c, 1), nil
+}
+
+func ListenFD(addr string) (ret int, err error) {
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		return -1, errors.New("XDG_RUNTIME_DIR not set in the environment")
+	}
+	if addr == "" {
+		addr = os.Getenv("WAYLAND_DISPLAY")
+	}
+	if addr == "" {
+		addr = "wayland-0"
+	}
+	addr = runtimeDir + "/" + addr
+
+	sockFD, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err != nil {
+		log.Println(err)
+		return -1, err
+	}
+	var sockAddr unix.SockaddrUnix
+	sockAddr.Name = addr
+	unix.Unlink(addr)
+	err = unix.Bind(sockFD, &sockAddr)
+	if err != nil {
+		log.Printf("Couldn't bind %s\n", sockAddr.Name)
+	}
+	err = unix.Listen(sockFD, 64)
+	if err != nil {
+		log.Println(err)
+		return -1, err
+	}
+
+	return sockFD, nil
 }
 
 func (c *Context) run() {
-	ctx := context.Background()
+	// ctx := context.Background()
 
 loop:
 	for {
@@ -110,11 +229,11 @@ loop:
 				log.Fatal(err)
 			}
 
-			proxy := c.lookupProxy(ev.pid)
+			proxy := c.LookupProxy(ev.Pid)
 			if proxy != nil {
 				if dispatcher, ok := proxy.(Dispatcher); ok {
-					dispatcher.Dispatch(ctx, ev)
-					bytePool.Give(ev.data)
+					dispatcher.Dispatch(ev)
+					bytePool.Give(ev.Data)
 				} else {
 					log.Print("Not dispatched")
 				}
