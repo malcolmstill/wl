@@ -25,6 +25,7 @@ type Context struct {
 	dispatchChan chan struct{}
 	exitChan     chan struct{}
 	fds          []uintptr
+	serverId     ProxyId
 }
 
 func (ctx *Context) Register(proxy Proxy) {
@@ -53,6 +54,13 @@ func (ctx *Context) LookupProxy(id ProxyId) Proxy {
 		return nil
 	}
 	return proxy
+}
+
+func (ctx *Context) NextServerId() ProxyId {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.serverId += 1
+	return ctx.serverId
 }
 
 func (ctx *Context) unregister(proxy Proxy) {
@@ -124,6 +132,7 @@ func Connect(addr string) (ret *Display, err error) {
 
 func NewClientConnect(fd int) *Display {
 	c := new(Context)
+	c.serverId = 0xff000000 - 1
 	c.objects = make(map[ProxyId]Proxy)
 	c.currentId = 0
 	c.dispatchChan = make(chan struct{})
